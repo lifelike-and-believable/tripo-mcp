@@ -129,6 +129,40 @@ async def create_3d_model_from_image(
 
 
 @mcp.tool()
+async def rig_model(
+    model_task_id: str, spec: str = "unreal", rig_type: str = "biped", out_format: str = "glb"
+) -> Dict[str, Any]:
+    """
+    Start a Tripo task that adds a skeleton and skin weights to a generated model.
+
+    Works best on characters generated in a T-pose or A-pose. The call returns at once
+    with a new task_id; poll get_task_status with it, then save the rigged model with
+    download_task_model.
+
+    Args:
+        model_task_id: The task ID of a successful create_3d_model_* task.
+        spec: Skeleton convention: "unreal" (Unreal Mannequin bone names), "mixamo",
+            "unity", "vrm", "actorcore" or "tripo".
+        rig_type: "biped", "quadruped", "hexapod", "octopod", "avian", "serpentine",
+            "aquatic" or "others".
+        out_format: "glb" or "fbx".
+
+    Returns:
+        The rigging task ID and its initial status.
+    """
+    async with _client() as client:
+        task_id = await client.rig_model(
+            original_model_task_id=model_task_id,
+            # The unreal, unity and vrm specs need a v2.5+ rig model.
+            model_version="v3.0-20260909",
+            out_format=out_format,
+            rig_type=rig_type,
+            spec=spec,
+        )
+        return _started(task_id, await client.get_task(task_id))
+
+
+@mcp.tool()
 async def get_task_status(task_id: str) -> Dict[str, Any]:
     """
     Get the status of a Tripo generation task.

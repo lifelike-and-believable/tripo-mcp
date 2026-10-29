@@ -11,6 +11,7 @@ Tripo MCP lets AI assistants generate 3D models with [Tripo AI](https://www.trip
 | `create_3d_model_from_text` | Starts a Tripo task from a text description and returns its `task_id`. |
 | `create_3d_model_from_image` | Starts a Tripo task from a local image path or URL. |
 | `get_task_status` | Reports a task's status and progress; poll it until `SUCCESS`. |
+| `rig_model` | Rigs a generated model (default: Unreal Mannequin skeleton naming); returns a new `task_id`. |
 | `download_task_model` | Saves a finished task's model (usually `.glb`) and preview image to a folder. |
 
 A typical run: start a task, poll `get_task_status` (generation usually takes 1-5 minutes), then call `download_task_model`.
