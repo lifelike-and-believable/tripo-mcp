@@ -10,11 +10,22 @@ Tripo MCP lets AI assistants generate 3D models with [Tripo AI](https://www.trip
 | --- | --- |
 | `create_3d_model_from_text` | Starts a Tripo task from a text description and returns its `task_id`. |
 | `create_3d_model_from_image` | Starts a Tripo task from a local image path or URL. |
-| `get_task_status` | Reports a task's status and progress; poll it until `SUCCESS`. |
+| `get_task_status` | Reports a task's status, progress and credits used; poll it until `SUCCESS`. |
+| `check_riggable` | Free check whether a generated model can be rigged, and as what (for example `biped`). |
 | `rig_model` | Rigs a generated model (default: Unreal Mannequin skeleton naming); returns a new `task_id`. |
 | `download_task_model` | Saves a finished task's model (usually `.glb`) and preview image to a folder. |
 
-A typical run: start a task, poll `get_task_status` (generation usually takes 1-5 minutes), then call `download_task_model`.
+A typical run: start a task, poll `get_task_status` (generation usually takes 1-5 minutes), then call `download_task_model`. For a character, call `check_riggable` before `rig_model`.
+
+### Generation defaults
+
+The generation tools pin Tripo's models instead of taking whatever the API or SDK defaults to (the tripo3d SDK otherwise sends the legacy `v2.5-20250123` model):
+
+- geometry model `v3.1-20260211` (pass `model_version="P2-20260801"` for low-poly with native quads),
+- texture model `v3.5-20260815` with `delight` on, which removes lighting baked into the input image,
+- PBR maps and `auto_size` (real-world size in metres) on.
+
+Both tools also take `face_limit`, `texture_quality`, `geometry_quality`, `quad`, `smart_low_poly` and the `model_seed`/`texture_seed` seeds; the image tool adds `orientation` and `enable_image_autofix`, the text tool `negative_prompt`. Each call returns the settings it sent.
 
 ## Setup
 

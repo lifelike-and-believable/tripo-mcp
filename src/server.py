@@ -47,12 +47,19 @@ FAILED_STATUSES = (
     TaskStatus.EXPIRED,
 )
 
+# Pinned rather than left to defaults: the SDK sends the legacy v2.5 model unless told
+# otherwise, and Tripo moves the server default between releases.
+MODEL_VERSION = "v3.1-20260211"
+# The texture model that can remove lighting baked into an input image (delight).
+TEXTURE_VERSION = "v3.5-20260815"
+
 mcp = FastMCP(
     name="Tripo MCP",
     instructions=(
         "Generates 3D models with Tripo AI and saves them as files on disk. "
         "Start a task with create_3d_model_from_text or create_3d_model_from_image, poll "
         "get_task_status until it succeeds, then call download_task_model to save the model. "
+        "To rig a character, call check_riggable first, then rig_model. "
         "The saved GLB file can be imported into any tool, for example Blender for further "
         "work or a game engine directly. The API key comes from the TRIPO_API_KEY "
         "environment variable."
@@ -71,8 +78,8 @@ def _client() -> TripoClient:
     return TripoClient()
 
 
-def _started(task_id: str, task) -> Dict[str, Any]:
-    return {
+def _started(task_id: str, task, settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    result = {
         "task_id": task_id,
         "status": str(task.status),
         "progress": task.progress,
@@ -80,52 +87,169 @@ def _started(task_id: str, task) -> Dict[str, Any]:
         "next_step": "Call get_task_status with this task_id until the status is SUCCESS, "
         "then call download_task_model.",
     }
+    if settings:
+        result["settings"] = settings
+    return result
+
+
+def _generation_settings(
+    model_version: str, face_limit: Optional[int], texture_quality: str,
+    geometry_quality: str, pbr: bool, auto_size: bool, delight: bool, quad: bool,
+    smart_low_poly: bool, model_seed: Optional[int], texture_seed: Optional[int],
+) -> Dict[str, Any]:
+    """The options both generation tools share, as SDK keyword arguments."""
+    settings: Dict[str, Any] = {
+        "model_version": model_version, "face_limit": face_limit,
+        "texture_quality": texture_quality, "geometry_quality": geometry_quality,
+        "pbr": pbr, "auto_size": auto_size, "quad": quad, "smart_low_poly": smart_low_poly,
+        "model_seed": model_seed, "texture_seed": texture_seed,
+    }
+    if delight:
+        settings.update(texture_version=TEXTURE_VERSION, delight=True)
+    return settings
 
 
 @mcp.tool()
 async def create_3d_model_from_text(
-    describe_the_look_of_object: str, face_limit: Optional[int] = None
+    describe_the_look_of_object: str,
+    negative_prompt: Optional[str] = None,
+    model_version: str = MODEL_VERSION,
+    face_limit: Optional[int] = None,
+    texture_quality: str = "standard",
+    geometry_quality: str = "standard",
+    pbr: bool = True,
+    auto_size: bool = True,
+    delight: bool = True,
+    quad: bool = False,
+    smart_low_poly: bool = False,
+    model_seed: Optional[int] = None,
+    texture_seed: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Start a Tripo task that generates a 3D model from a text description.
 
-    The call returns at once with a task_id. Poll get_task_status with it until the
-    status is SUCCESS, then save the model with download_task_model.
+    Prefer create_3d_model_from_image with an approved concept image for anything whose
+    look matters; text alone suits simple filler props. The call returns at once with a
+    task_id. Poll get_task_status with it until the status is SUCCESS, then save the
+    model with download_task_model.
 
     Args:
-        describe_the_look_of_object: A detailed description of the object to generate.
-        face_limit: Optional maximum number of faces in the model.
+        describe_the_look_of_object: The object's shape, material, style and size
+            (up to 1024 characters).
+        negative_prompt: What to avoid (up to 255 characters).
+        model_version: Tripo geometry model. "v3.1-20260211" (default, best quality,
+            up to 2M faces with geometry_quality "detailed") or "P2-20260801" (low-poly,
+            native quads).
+        face_limit: Maximum number of faces; Tripo suggests 50k-100k for game assets.
+        texture_quality: "fast", "standard", "detailed" or "extreme" (8K).
+        geometry_quality: "standard" or "detailed" (v3.1 only).
+        pbr: Also make metallic, roughness and normal maps.
+        auto_size: Scale the model to its real-world size in metres.
+        delight: Remove lighting baked into the textures (uses texture model v3.5).
+        quad: Quad topology (the result is FBX).
+        smart_low_poly: Hand-made-style low-poly topology (500-20k faces); may fail on
+            complex subjects.
+        model_seed: Fix the geometry seed to reproduce or vary a result.
+        texture_seed: Fix the texture seed.
 
     Returns:
-        The task ID and its initial status.
+        The task ID, its initial status and the settings sent.
     """
+    settings = _generation_settings(
+        model_version, face_limit, texture_quality, geometry_quality, pbr, auto_size,
+        delight, quad, smart_low_poly, model_seed, texture_seed)
     async with _client() as client:
         task_id = await client.text_to_model(
-            prompt=describe_the_look_of_object, face_limit=face_limit
+            prompt=describe_the_look_of_object, negative_prompt=negative_prompt, **settings
         )
-        return _started(task_id, await client.get_task(task_id))
+        return _started(task_id, await client.get_task(task_id), settings)
 
 
 @mcp.tool()
 async def create_3d_model_from_image(
-    image: str, face_limit: Optional[int] = None
+    image: str,
+    model_version: str = MODEL_VERSION,
+    face_limit: Optional[int] = None,
+    texture_quality: str = "standard",
+    geometry_quality: str = "standard",
+    pbr: bool = True,
+    auto_size: bool = True,
+    delight: bool = True,
+    quad: bool = False,
+    smart_low_poly: bool = False,
+    model_seed: Optional[int] = None,
+    texture_seed: Optional[int] = None,
+    orientation: str = "default",
+    enable_image_autofix: bool = False,
 ) -> Dict[str, Any]:
     """
     Start a Tripo task that generates a 3D model from an image.
 
-    The call returns at once with a task_id. Poll get_task_status with it until the
-    status is SUCCESS, then save the model with download_task_model.
+    Best input: one whole subject, orthographic front view, flat shadowless lighting,
+    plain light background, at least 1024 px. The call returns at once with a task_id.
+    Poll get_task_status with it until the status is SUCCESS, then save the model with
+    download_task_model.
 
     Args:
         image: Local path or URL of the image.
-        face_limit: Optional maximum number of faces in the model.
+        model_version: Tripo geometry model. "v3.1-20260211" (default, best quality,
+            up to 2M faces with geometry_quality "detailed") or "P2-20260801" (low-poly,
+            native quads).
+        face_limit: Maximum number of faces; Tripo suggests 50k-100k for game assets.
+        texture_quality: "fast", "standard", "detailed" or "extreme" (8K).
+        geometry_quality: "standard" or "detailed" (v3.1 only).
+        pbr: Also make metallic, roughness and normal maps.
+        auto_size: Scale the model to its real-world size in metres.
+        delight: Remove lighting baked into the image from the textures (uses texture
+            model v3.5).
+        quad: Quad topology (the result is FBX).
+        smart_low_poly: Hand-made-style low-poly topology (500-20k faces); may fail on
+            complex subjects.
+        model_seed: Fix the geometry seed to reproduce or vary a result.
+        texture_seed: Fix the texture seed.
+        orientation: "default", or "align_image" to turn the model to match the image.
+        enable_image_autofix: Let Tripo clean up a low-quality image first.
 
     Returns:
-        The task ID and its initial status.
+        The task ID, its initial status and the settings sent.
+    """
+    settings = _generation_settings(
+        model_version, face_limit, texture_quality, geometry_quality, pbr, auto_size,
+        delight, quad, smart_low_poly, model_seed, texture_seed)
+    async with _client() as client:
+        task_id = await client.image_to_model(
+            image=image, orientation=orientation, enable_image_autofix=enable_image_autofix,
+            **settings
+        )
+        return _started(task_id, await client.get_task(task_id), settings)
+
+
+@mcp.tool()
+async def check_riggable(model_task_id: str) -> Dict[str, Any]:
+    """
+    Check whether a generated model can be rigged, before paying for rig_model.
+
+    The check is free and waits for its answer (usually seconds). Only call rig_model
+    when riggable is true, with the rig_type reported here.
+
+    Args:
+        model_task_id: The task ID of a successful create_3d_model_* task.
+
+    Returns:
+        Whether the model can be rigged and the rig type Tripo detected (for example
+        "biped").
     """
     async with _client() as client:
-        task_id = await client.image_to_model(image=image, face_limit=face_limit)
-        return _started(task_id, await client.get_task(task_id))
+        task_id = await client.rig_check(model_task_id)
+        task = await client.wait_for_task(task_id, timeout=300)
+    if task.status != TaskStatus.SUCCESS or not task.output:
+        raise ValueError(f"Rig check {task_id} ended with status {task.status}.")
+    rig_type = task.output.rig_type
+    return {
+        "model_task_id": model_task_id,
+        "riggable": bool(task.output.riggable),
+        "rig_type": getattr(rig_type, "value", rig_type),
+    }
 
 
 @mcp.tool()
@@ -135,9 +259,9 @@ async def rig_model(
     """
     Start a Tripo task that adds a skeleton and skin weights to a generated model.
 
-    Works best on characters generated in a T-pose or A-pose. The call returns at once
-    with a new task_id; poll get_task_status with it, then save the rigged model with
-    download_task_model.
+    Works best on characters generated in a T-pose or A-pose. Call check_riggable first
+    (free) and rig only a riggable model. The call returns at once with a new task_id;
+    poll get_task_status with it, then save the rigged model with download_task_model.
 
     Args:
         model_task_id: The task ID of a successful create_3d_model_* task.
@@ -181,6 +305,8 @@ async def get_task_status(task_id: str) -> Dict[str, Any]:
         task = await client.get_task(task_id)
 
     result = {"task_id": task_id, "status": str(task.status), "progress": task.progress}
+    if task.credits_consumed is not None:
+        result["credits_consumed"] = task.credits_consumed
     if task.status == TaskStatus.SUCCESS and task.output:
         result.update(
             {
