@@ -1,7 +1,7 @@
 [project]
 name = "tripo-mcp"
-version = "0.1.2"
-description = "MCP (Model Control Protocol) integration for Tripo"
+version = "0.2.0"
+description = "MCP server that generates 3D models with Tripo AI and saves them to disk"
 authors = [
     {name = "Allen Dang", email = "allen@vastai3d.com"},
     {name = "pookiefoof", email = "caoyanpei@gmail.com"},
@@ -10,7 +10,7 @@ authors = [
 license = {text = "MIT"}
 readme = "README.md"
 requires-python = ">=3.10"
-keywords = ["mcp", "blender", "3d", "automation"]
+keywords = ["mcp", "tripo", "3d", "glb", "automation"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -20,8 +20,8 @@ classifiers = [
 ]
 
 dependencies = [
-    "tripo3d>=0.2.0",
-    "mcp[cli]>=1.4.1",
+    "tripo3d>=1.0,<2",
+    "mcp[cli]>=1.4.1,<2",
 ]
 
 [project.optional-dependencies]
