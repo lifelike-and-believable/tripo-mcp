@@ -1,6 +1,6 @@
 [project]
 name = "tripo-mcp"
-version = "0.2.0"
+version = "0.3.0"
 description = "MCP server that generates 3D models with Tripo AI and saves them to disk"
 authors = [
     {name = "Allen Dang", email = "allen@vastai3d.com"},

@@ -26,11 +26,15 @@ This file is based on work by Siddharth Ahuja, with additional contributions
 for Tripo MCP functionality.
 """
 
+import datetime
+import json
 import logging
 import os
+import random
 import re
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP
 from tripo3d import TaskStatus, TripoClient
@@ -53,12 +57,20 @@ MODEL_VERSION = "v3.1-20260211"
 # The texture model that can remove lighting baked into an input image (delight).
 TEXTURE_VERSION = "v3.5-20260815"
 
+# The fields of a task's input (as Tripo echoes it back) that say how it was made.
+RECIPE_KEYS = (
+    "model_version", "texture_version", "model_seed", "texture_seed", "face_limit",
+    "geometry_quality", "texture_quality", "pbr", "delight", "auto_size", "quad",
+    "smart_low_poly", "orientation", "spec", "topology", "original_model_id",
+)
+
 mcp = FastMCP(
     name="Tripo MCP",
     instructions=(
         "Generates 3D models with Tripo AI and saves them as files on disk. "
-        "Start a task with create_3d_model_from_text or create_3d_model_from_image, poll "
-        "get_task_status until it succeeds, then call download_task_model to save the model. "
+        "Start a task with create_3d_model_from_text, create_3d_model_from_image or "
+        "create_3d_model_from_multiview, poll get_task_status until it succeeds, then call "
+        "download_task_model to save the model and its provenance record. "
         "To rig a character, call check_riggable first, then rig_model. "
         "The saved GLB file can be imported into any tool, for example Blender for further "
         "work or a game engine directly. The API key comes from the TRIPO_API_KEY "
@@ -92,17 +104,35 @@ def _started(task_id: str, task, settings: Optional[Dict[str, Any]] = None) -> D
     return result
 
 
+def _random_seed() -> int:
+    return random.randrange(1, 2**31)
+
+
+def _recipe(task) -> Dict[str, Any]:
+    return {key: task.input[key] for key in RECIPE_KEYS if key in task.input}
+
+
+def _server_version() -> str:
+    try:
+        return version("tripo-mcp")
+    except PackageNotFoundError:
+        return "unknown"
+
+
 def _generation_settings(
     model_version: str, face_limit: Optional[int], texture_quality: str,
     geometry_quality: str, pbr: bool, auto_size: bool, delight: bool, quad: bool,
     smart_low_poly: bool, model_seed: Optional[int], texture_seed: Optional[int],
 ) -> Dict[str, Any]:
-    """The options both generation tools share, as SDK keyword arguments."""
+    """The options the generation tools share, as SDK keyword arguments."""
+    # Tripo does not report a seed it chose itself, so pick one here: every result can
+    # then be reproduced from its provenance record.
     settings: Dict[str, Any] = {
         "model_version": model_version, "face_limit": face_limit,
         "texture_quality": texture_quality, "geometry_quality": geometry_quality,
         "pbr": pbr, "auto_size": auto_size, "quad": quad, "smart_low_poly": smart_low_poly,
-        "model_seed": model_seed, "texture_seed": texture_seed,
+        "model_seed": model_seed if model_seed is not None else _random_seed(),
+        "texture_seed": texture_seed if texture_seed is not None else _random_seed(),
     }
     if delight:
         settings.update(texture_version=TEXTURE_VERSION, delight=True)
@@ -225,6 +255,81 @@ async def create_3d_model_from_image(
 
 
 @mcp.tool()
+async def create_3d_model_from_multiview(
+    front: str,
+    back: Optional[str] = None,
+    left: Optional[str] = None,
+    right: Optional[str] = None,
+    model_version: str = MODEL_VERSION,
+    face_limit: Optional[int] = None,
+    texture_quality: str = "standard",
+    geometry_quality: str = "standard",
+    pbr: bool = True,
+    auto_size: bool = True,
+    delight: bool = True,
+    quad: bool = False,
+    smart_low_poly: bool = False,
+    model_seed: Optional[int] = None,
+    texture_seed: Optional[int] = None,
+    orientation: str = "default",
+) -> Dict[str, Any]:
+    """
+    Start a Tripo task that generates a 3D model from several views of one subject.
+
+    Use it when the back or sides carry design that a front view cannot show (hero
+    characters, backpacks, ponytails); a single image suits most props. Front plus back
+    is the most reliable pair: derive the back by editing the approved front image so
+    canvas, framing, scale and lighting match, and check head, shoulder, hip and foot
+    lines align. Add a side only when its silhouette matters. Left and right are the
+    subject's own left and right. The call returns at once with a task_id; poll
+    get_task_status, then save the model with download_task_model.
+
+    Args:
+        front: Local path or URL of the front view (required).
+        back: Path or URL of the back view.
+        left: Path or URL of the view of the subject's left side.
+        right: Path or URL of the view of the subject's right side.
+        model_version: Tripo geometry model. "v3.1-20260211" (default) or "P2-20260801"
+            (low-poly, native quads).
+        face_limit: Maximum number of faces; Tripo suggests 50k-100k for game assets.
+        texture_quality: "fast", "standard", "detailed" or "extreme" (8K).
+        geometry_quality: "standard" or "detailed" (v3.1 only).
+        pbr: Also make metallic, roughness and normal maps.
+        auto_size: Scale the model to its real-world size in metres.
+        delight: Remove lighting baked into the images from the textures (uses texture
+            model v3.5).
+        quad: Quad topology (the result is FBX).
+        smart_low_poly: Hand-made-style low-poly topology (500-20k faces); may fail on
+            complex subjects.
+        model_seed: Fix the geometry seed to reproduce or vary a result.
+        texture_seed: Fix the texture seed.
+        orientation: "default", or "align_image" to turn the model to match the front.
+
+    Returns:
+        The task ID, its initial status, the views sent and the settings sent.
+    """
+    if not (back or left or right):
+        raise ValueError(
+            "Pass at least one of back, left or right; for a front view alone use "
+            "create_3d_model_from_image."
+        )
+    settings = _generation_settings(
+        model_version, face_limit, texture_quality, geometry_quality, pbr, auto_size,
+        delight, quad, smart_low_poly, model_seed, texture_seed)
+    async with _client() as client:
+        # The API takes the views in this order, with None for a missing one.
+        task_id = await client.multiview_to_model(
+            images=[front, left, back, right], orientation=orientation, **settings
+        )
+        result = _started(task_id, await client.get_task(task_id), settings)
+    result["views"] = {
+        name: view for name, view in
+        (("front", front), ("back", back), ("left", left), ("right", right)) if view
+    }
+    return result
+
+
+@mcp.tool()
 async def check_riggable(model_task_id: str) -> Dict[str, Any]:
     """
     Check whether a generated model can be rigged, before paying for rig_model.
@@ -295,16 +400,20 @@ async def get_task_status(task_id: str) -> Dict[str, Any]:
     or one of FAILED, CANCELLED, BANNED or EXPIRED.
 
     Args:
-        task_id: The task ID returned by create_3d_model_from_text or
-            create_3d_model_from_image.
+        task_id: The task ID returned by a create_3d_model_* tool or rig_model.
 
     Returns:
-        The task status and progress, and the result URLs once it has succeeded.
+        The task status and progress, its type and recipe (model and texture versions,
+        seeds, face limit and the like, as Tripo recorded them), the credits used, and
+        the result URLs once it has succeeded.
     """
     async with _client() as client:
         task = await client.get_task(task_id)
 
-    result = {"task_id": task_id, "status": str(task.status), "progress": task.progress}
+    result = {
+        "task_id": task_id, "type": task.type, "status": str(task.status),
+        "progress": task.progress, "recipe": _recipe(task),
+    }
     if task.credits_consumed is not None:
         result["credits_consumed"] = task.credits_consumed
     if task.status == TaskStatus.SUCCESS and task.output:
@@ -324,12 +433,29 @@ async def get_task_status(task_id: str) -> Dict[str, Any]:
     return result
 
 
+def _task_record(task) -> Dict[str, Any]:
+    return {
+        "task_id": task.task_id,
+        "type": task.type,
+        "created_at": task.raw.get("created_at"),
+        "completed_at": task.completed_at,
+        "credits_consumed": task.credits_consumed,
+        "input": task.input,
+    }
+
+
 @mcp.tool()
 async def download_task_model(
-    task_id: str, output_dir: str = "", file_name: str = ""
+    task_id: str, output_dir: str = "", file_name: str = "",
+    input_images: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
-    Save the model of a successful Tripo task to disk.
+    Save the model of a successful Tripo task to disk, with a provenance record.
+
+    Next to the model it writes <file_name>_provenance.json: the generator, the task's
+    type, dates, credits and full input as Tripo recorded them (model and texture
+    versions, seeds, prompt), the input images you name, and for a rigged model the
+    record of the model task it was rigged from. Keep it with the model.
 
     Args:
         task_id: The ID of a task whose status is SUCCESS.
@@ -337,10 +463,13 @@ async def download_task_model(
             environment variable. Created if it does not exist.
         file_name: File name without extension. Defaults to the task ID. Letters,
             digits, '-' and '_' only.
+        input_images: The local paths or URLs of the image(s) the model was made from,
+            for the record (Tripo keeps only its own copy).
 
     Returns:
-        The absolute path of the saved model file (usually .glb) and, if Tripo made one,
-        of a rendered preview image saved next to it.
+        The absolute paths of the saved model file (usually .glb), of the rendered
+        preview image Tripo made, if any, and of the provenance record, plus the
+        task's credits.
     """
     folder = output_dir or os.environ.get("TRIPO_OUTPUT_DIR", "")
     if not folder:
@@ -371,6 +500,23 @@ async def download_task_model(
             preview_path = folder_path / f"{name}_preview{preview_ext}"
             await client.download_file(task.output.rendered_image, preview_path)
             result["preview_path"] = str(preview_path)
+
+        provenance = {
+            "generator": "Tripo AI",
+            "tool": f"tripo-mcp {_server_version()}",
+            "downloaded_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            **_task_record(task),
+            "input_images": input_images or [],
+            "files": {k: Path(v).name for k, v in result.items() if k.endswith("_path")},
+        }
+        source_id = task.input.get("original_model_id")
+        if source_id:
+            provenance["source_task"] = _task_record(await client.get_task(source_id))
+
+    provenance_path = folder_path / f"{name}_provenance.json"
+    provenance_path.write_text(json.dumps(provenance, indent=2, default=str), encoding="utf-8")
+    result["provenance_path"] = str(provenance_path)
+    result["credits_consumed"] = task.credits_consumed
 
     logger.info("Saved model of task %s to %s", task_id, model_path)
     return result

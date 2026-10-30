@@ -10,12 +10,19 @@ Tripo MCP lets AI assistants generate 3D models with [Tripo AI](https://www.trip
 | --- | --- |
 | `create_3d_model_from_text` | Starts a Tripo task from a text description and returns its `task_id`. |
 | `create_3d_model_from_image` | Starts a Tripo task from a local image path or URL. |
-| `get_task_status` | Reports a task's status, progress and credits used; poll it until `SUCCESS`. |
+| `create_3d_model_from_multiview` | Starts a Tripo task from a front view plus a back, left and/or right view of the same subject. |
+| `get_task_status` | Reports a task's status, progress, credits used and recipe (model and texture versions, seeds); poll it until `SUCCESS`. |
 | `check_riggable` | Free check whether a generated model can be rigged, and as what (for example `biped`). |
 | `rig_model` | Rigs a generated model (default: Unreal Mannequin skeleton naming); returns a new `task_id`. |
-| `download_task_model` | Saves a finished task's model (usually `.glb`) and preview image to a folder. |
+| `download_task_model` | Saves a finished task's model (usually `.glb`), preview image and provenance record to a folder. |
 
 A typical run: start a task, poll `get_task_status` (generation usually takes 1-5 minutes), then call `download_task_model`. For a character, call `check_riggable` before `rig_model`.
+
+Multiview helps when the back or sides carry design a front view cannot show, such as a hero character's back. Front plus back is the most reliable pair; make the back by editing the front image so framing, scale and lighting match.
+
+### Provenance
+
+`download_task_model` writes `<file_name>_provenance.json` next to the model: the task's type, dates, credits and full input as Tripo recorded it (model and texture versions, seeds, prompt, face limit), the input images you pass in `input_images`, and for a rigged model the record of the model task it came from. When you do not fix `model_seed` or `texture_seed`, the server picks random ones and sends them, because Tripo does not report seeds it chose itself; every result can therefore be reproduced from its record.
 
 ### Generation defaults
 
@@ -25,7 +32,7 @@ The generation tools pin Tripo's models instead of taking whatever the API or SD
 - texture model `v3.5-20260815` with `delight` on, which removes lighting baked into the input image,
 - PBR maps and `auto_size` (real-world size in metres) on.
 
-Both tools also take `face_limit`, `texture_quality`, `geometry_quality`, `quad`, `smart_low_poly` and the `model_seed`/`texture_seed` seeds; the image tool adds `orientation` and `enable_image_autofix`, the text tool `negative_prompt`. Each call returns the settings it sent.
+All three generation tools also take `face_limit`, `texture_quality`, `geometry_quality`, `quad`, `smart_low_poly` and the `model_seed`/`texture_seed` seeds; the image and multiview tools add `orientation`, the image tool `enable_image_autofix`, the text tool `negative_prompt`. Each call returns the settings it sent.
 
 ## Setup
 
